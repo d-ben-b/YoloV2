@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torchvision import transforms
-
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from PIL import Image
 
@@ -183,3 +183,26 @@ def filtered_boxes(model, device, img, conf_thresh, nms_thresh):
     boxes = nms(boxes, nms_thresh)
  
     return boxes
+
+def draw_boxes(image, boxes, class_names=None):
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default()
+
+    for box in boxes:
+        x, y, w, h, obj_score, cls_score, cls_id = box[:7]
+        xmin = (x - w / 2) * image.width
+        ymin = (y - h / 2) * image.height
+        xmax = (x + w / 2) * image.width
+        ymax = (y + h / 2) * image.height
+
+        label = f"ID:{int(cls_id)} Conf:{obj_score * cls_score:.2f}"
+        if class_names:
+            label = f"{class_names[int(cls_id)]} {obj_score * cls_score:.2f}"
+
+        draw.rectangle([xmin, ymin, xmax, ymax], outline="red", width=2)
+        draw.text((xmin, ymin - 10), label, fill="red", font=font)
+
+    return image
+
+
+    return boxes_list, labels_list, scores_list
