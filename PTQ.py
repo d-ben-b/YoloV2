@@ -14,7 +14,7 @@ def analyze_tensor(tensor, name):
         print("Warning: NaN or Inf values detected!")
     print()
 
-model_fp32 = YoloV2Net(num_classes=20)
+model_fp32 = YoloV2Net(num_classes=80)
 load_weights(model_fp32, "weights/yolov2.weights")
 with torch.no_grad():
     for m in model_fp32.modules():

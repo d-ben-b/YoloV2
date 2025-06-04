@@ -4,6 +4,9 @@ from torchvision import transforms
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from PIL import Image
+import os
+import time
+import cv2
 
 
 def gpu2cpu_long(gpu_matrix):
@@ -205,4 +208,95 @@ def draw_boxes(image, boxes, class_names=None):
     return image
 
 
-    return boxes_list, labels_list, scores_list
+def predict_ptq(model_path, conf_thresh, nms_thresh, img_path, class_names, device, save_to=None, num_classes=80):
+    """
+    Perform prediction using a quantized YOLOv2 model.
+    
+    Args:
+        model_path: Path to the quantized model weights (.pth)
+        conf_thresh: Confidence threshold for detections
+        nms_thresh: Non-maximum suppression threshold
+        img_path: Path to the input image
+        class_names: List of class names
+        device: Device to run inference on ('cpu' or 'cuda')
+        save_to: Path to save the output image (optional)
+        num_classes: Number of classes (default: 80 for VOC)
+    
+    Returns:
+        PIL.Image: Annotated image with bounding boxes
+    """
+    assert os.path.exists(img_path), 'Error! Input image does not exists.'
+    assert os.path.exists(model_path), 'Error! Model file does not exists.'
+    
+    # Load the model
+    from model import YoloV2Net
+    model = YoloV2Net(num_classes=num_classes)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    
+    # Load and prepare image
+    img = Image.open(img_path).convert('RGB')
+    
+    # Measure inference time
+    tic = time.time()
+    boxes = filtered_boxes(model, device, img.resize((608, 608)), conf_thresh, nms_thresh)
+    toc = time.time()
+    
+    print('PTQ prediction took {:.5f} ms.'.format((toc - tic) * 1000))
+    print(f'Using quantized model: {model_path}')
+    
+    # Draw bounding boxes on image
+    pred_img = draw_boxes(img, boxes, class_names)
+    
+    if save_to:
+        pred_img.save(save_to)
+    
+    return pred_img
+
+
+def predict_ptq_cv2(model_path, conf_thresh, nms_thresh, img_path, class_names, device, save_to=None, num_classes=80):
+    """
+    Perform prediction using a quantized YOLOv2 model with OpenCV.
+    
+    Args:
+        model_path: Path to the quantized model weights (.pth)
+        conf_thresh: Confidence threshold for detections
+        nms_thresh: Non-maximum suppression threshold
+        img_path: Path to the input image
+        class_names: List of class names
+        device: Device to run inference on ('cpu' or 'cuda')
+        save_to: Path to save the output image (optional)
+        num_classes: Number of classes (default: 80 for VOC)
+    
+    Returns:
+        Annotated image with bounding boxes (through IPython display)
+    """
+    assert os.path.exists(img_path), 'Error! Input image does not exists.'
+    assert os.path.exists(model_path), 'Error! Model file does not exists.'
+    
+    # Load the model
+    from model import YoloV2Net
+    model = YoloV2Net(num_classes=num_classes)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    
+    # Load and prepare image
+    img = cv2.imread(img_path)
+    
+    # Measure inference time
+    tic = time.time()
+    boxes = filtered_boxes(model, device, cv2.resize(img, (608, 608)), conf_thresh, nms_thresh)
+    toc = time.time()
+    
+    print('PTQ prediction took {:.5f} ms.'.format((toc - tic) * 1000))
+    print(f'Using quantized model: {model_path}')
+    
+    # Draw bounding boxes on image
+    pred_img = draw_boxes(Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)), boxes, class_names)
+    
+    if save_to:
+        pred_img.save(save_to)
+    
+    return pred_img

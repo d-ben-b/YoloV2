@@ -23,7 +23,7 @@ def main():
     # model = YoloV2Net(num_classes=20)  # VOC = 20 類
     # state_dict = torch.load("./yolov2_pot2_int8.pth", map_location=device)
     # state_dict = adjust_state_dict_keys(state_dict)
-    model = YoloV2Net(num_classes=20)
+    model = YoloV2Net(num_classes=80)
     model.load_state_dict(torch.load("yolov2_pot2_weightonly.pth"))
     print("✅ 已載入模型：yolov2_pot2_int8.pt !!!"*2)
     print(type(model))
