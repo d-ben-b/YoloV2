@@ -37,8 +37,8 @@ class Conv2D(nn.Module):
         padding = (kernel_size - 1) // 2 if padding else 0
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=False)
         self.bn   = nn.BatchNorm2d(out_channels)
-        # self.relu = nn.ReLU(0.1, inplace=True) if activation else lambda x : x
-        self.relu = nn.ReLU()
+        self.relu = nn.LeakyReLU(0.1, inplace=False)
+        # self.relu = nn.ReLU(inplace=True)
         self.pooling = pooling
  
     def forward(self, x):

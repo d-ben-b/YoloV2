@@ -6,8 +6,6 @@ import numpy as np
 from PIL import Image
 import os
 import time
-import cv2
-
 
 def gpu2cpu_long(gpu_matrix):
     return torch.LongTensor(gpu_matrix.size()).copy_(gpu_matrix)
@@ -187,46 +185,27 @@ def filtered_boxes(model, device, img, conf_thresh, nms_thresh):
  
     return boxes
 
-def draw_boxes(image, boxes, class_names=None):
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default()
-
-    for box in boxes:
-        x, y, w, h, obj_score, cls_score, cls_id = box[:7]
-        xmin = (x - w / 2) * image.width
-        ymin = (y - h / 2) * image.height
-        xmax = (x + w / 2) * image.width
-        ymax = (y + h / 2) * image.height
-
-        label = f"ID:{int(cls_id)} Conf:{obj_score * cls_score:.2f}"
-        if class_names:
-            label = f"{class_names[int(cls_id)]} {obj_score * cls_score:.2f}"
-
-        draw.rectangle([xmin, ymin, xmax, ymax], outline="red", width=2)
-        draw.text((xmin, ymin - 10), label, fill="red", font=font)
-
-    return image
-
-
-def predict_ptq(model_path, conf_thresh, nms_thresh, img_path, class_names, device, save_to=None, num_classes=80):
+def predict_ptq_low_conf(model_path, img_path, class_names, device, save_to=None, num_classes=80, 
+                        conf_thresh=0.01, nms_thresh=0.4):
     """
-    Perform prediction using a quantized YOLOv2 model.
+    Perform prediction using a quantized YOLOv2 model with lower confidence threshold.
+    Specially designed for quantized models which typically produce lower confidence scores.
     
     Args:
         model_path: Path to the quantized model weights (.pth)
-        conf_thresh: Confidence threshold for detections
-        nms_thresh: Non-maximum suppression threshold
         img_path: Path to the input image
         class_names: List of class names
         device: Device to run inference on ('cpu' or 'cuda')
         save_to: Path to save the output image (optional)
-        num_classes: Number of classes (default: 80 for VOC)
+        num_classes: Number of classes (default: 80 for COCO)
+        conf_thresh: Confidence threshold for detections (default: 0.01, much lower than normal)
+        nms_thresh: Non-maximum suppression threshold (default: 0.4)
     
     Returns:
         PIL.Image: Annotated image with bounding boxes
     """
-    assert os.path.exists(img_path), 'Error! Input image does not exists.'
-    assert os.path.exists(model_path), 'Error! Model file does not exists.'
+    assert os.path.exists(img_path), 'Error! Input image does not exist.'
+    assert os.path.exists(model_path), 'Error! Model file does not exist.'
     
     # Load the model
     from model import YoloV2Net
@@ -246,34 +225,44 @@ def predict_ptq(model_path, conf_thresh, nms_thresh, img_path, class_names, devi
     print('PTQ prediction took {:.5f} ms.'.format((toc - tic) * 1000))
     print(f'Using quantized model: {model_path}')
     
-    # Draw bounding boxes on image
-    pred_img = draw_boxes(img, boxes, class_names)
+    # Debug detection info
+    print(f"Number of detected boxes: {len(boxes)}")
+    if len(boxes) > 0:
+        # Sort boxes by confidence and print top 5
+        sorted_boxes = sorted(boxes, key=lambda x: x[4]*x[5], reverse=True)
+        for i, box in enumerate(sorted_boxes[:5]):
+            cls_id = int(box[6])
+            cls_name = class_names[cls_id] if isinstance(class_names, list) and cls_id < len(class_names) else f"Class {cls_id}"
+            conf = box[4] * box[5]
+            print(f"Box {i}: {cls_name} - Confidence: {conf:.4f}")
     
-    if save_to:
-        pred_img.save(save_to)
+    # Draw bounding boxes on image
+    pred_img = plot_boxes(img, boxes, save_to, class_names)
     
     return pred_img
 
 
-def predict_ptq_cv2(model_path, conf_thresh, nms_thresh, img_path, class_names, device, save_to=None, num_classes=80):
+def predict_ptq_rescaled(model_path, img_path, class_names, device, save_to=None, num_classes=80, 
+                        conf_thresh=0.0001, nms_thresh=0.4, confidence_scale=200.0):
     """
-    Perform prediction using a quantized YOLOv2 model with OpenCV.
+    Prediction with confidence rescaling to compensate for quantization effects.
     
     Args:
         model_path: Path to the quantized model weights (.pth)
-        conf_thresh: Confidence threshold for detections
-        nms_thresh: Non-maximum suppression threshold
         img_path: Path to the input image
         class_names: List of class names
         device: Device to run inference on ('cpu' or 'cuda')
         save_to: Path to save the output image (optional)
-        num_classes: Number of classes (default: 80 for VOC)
+        num_classes: Number of classes (default: 80 for COCO)
+        conf_thresh: Confidence threshold for detections 
+        nms_thresh: Non-maximum suppression threshold (default: 0.4)
+        confidence_scale: Factor to multiply confidence scores by (default: 200.0)
     
     Returns:
-        Annotated image with bounding boxes (through IPython display)
+        PIL.Image: Annotated image with bounding boxes
     """
-    assert os.path.exists(img_path), 'Error! Input image does not exists.'
-    assert os.path.exists(model_path), 'Error! Model file does not exists.'
+    assert os.path.exists(img_path), 'Error! Input image does not exist.'
+    assert os.path.exists(model_path), 'Error! Model file does not exist.'
     
     # Load the model
     from model import YoloV2Net
@@ -283,20 +272,168 @@ def predict_ptq_cv2(model_path, conf_thresh, nms_thresh, img_path, class_names, 
     model.eval()
     
     # Load and prepare image
-    img = cv2.imread(img_path)
+    img = Image.open(img_path).convert('RGB')
     
     # Measure inference time
     tic = time.time()
-    boxes = filtered_boxes(model, device, cv2.resize(img, (608, 608)), conf_thresh, nms_thresh)
+    boxes = filtered_boxes(model, device, img.resize((608, 608)), conf_thresh, nms_thresh)
     toc = time.time()
     
     print('PTQ prediction took {:.5f} ms.'.format((toc - tic) * 1000))
     print(f'Using quantized model: {model_path}')
     
-    # Draw bounding boxes on image
-    pred_img = draw_boxes(Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)), boxes, class_names)
+    # Debug detection info
+    print(f"Number of detected boxes: {len(boxes)}")
+    
+    # Apply confidence scaling - this doesn't change which boxes are detected,
+    # but makes the visualization more informative
+    scaled_boxes = []
+    for box in boxes:
+        # Create a copy of the box
+        scaled_box = box.copy()
+        # Scale the objectness score for visualization (box[4] is obj score)
+        scaled_box[4] = min(scaled_box[4] * confidence_scale, 1.0)
+        scaled_boxes.append(scaled_box)
+    
+    # Show the top detections with rescaled confidence
+    if len(scaled_boxes) > 0:
+        # Sort boxes by confidence and print top 5
+        sorted_boxes = sorted(scaled_boxes, key=lambda x: x[4]*x[5], reverse=True)
+        print("\nTop detections with rescaled confidence:")
+        for i, box in enumerate(sorted_boxes[:5]):
+            cls_id = int(box[6])
+            cls_name = class_names[cls_id] if isinstance(class_names, list) and cls_id < len(class_names) else f"Class {cls_id}"
+            conf = box[4] * box[5]  # This is now the rescaled confidence
+            print(f"Box {i}: {cls_name} - Rescaled Confidence: {conf:.4f}")
+    
+    # Draw bounding boxes on image using the scaled boxes
+    pred_img = plot_boxes(img, scaled_boxes, save_to, class_names)
     
     if save_to:
-        pred_img.save(save_to)
+        print(f"Saved prediction with rescaled confidence to {save_to}")
     
     return pred_img
+
+
+def predict_ptq_rescaled_v2(model_path, img_path, class_names, device, save_to=None, num_classes=80, 
+                        conf_thresh=0.0001, nms_thresh=0.4, confidence_scale=200.0):
+    """
+    Enhanced prediction with confidence rescaling that properly affects visualization.
+    
+    Args:
+        model_path: Path to the quantized model weights (.pth)
+        img_path: Path to the input image
+        class_names: List of class names
+        device: Device to run inference on ('cpu' or 'cuda')
+        save_to: Path to save the output image (optional)
+        num_classes: Number of classes (default: 80 for COCO)
+        conf_thresh: Confidence threshold for detections 
+        nms_thresh: Non-maximum suppression threshold (default: 0.4)
+        confidence_scale: Factor to multiply confidence scores by (default: 200.0)
+    
+    Returns:
+        PIL.Image: Annotated image with bounding boxes
+    """
+    assert os.path.exists(img_path), 'Error! Input image does not exist.'
+    assert os.path.exists(model_path), 'Error! Model file does not exist.'
+    
+    # Load the model
+    from model import YoloV2Net
+    model = YoloV2Net(num_classes=num_classes)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    
+    # Load and prepare image
+    img = Image.open(img_path).convert('RGB')
+    
+    # Measure inference time
+    tic = time.time()
+    boxes = filtered_boxes(model, device, img.resize((608, 608)), conf_thresh, nms_thresh)
+    toc = time.time()
+    
+    print('PTQ prediction took {:.5f} ms.'.format((toc - tic) * 1000))
+    print(f'Using quantized model: {model_path}')
+    
+    # Debug detection info
+    print(f"Number of detected boxes: {len(boxes)}")
+    
+    # Apply confidence scaling and draw boxes directly instead of using plot_boxes
+    draw = ImageDraw.Draw(img)
+    
+    # Try to use a built-in font or fall back to default
+    try:
+        font = ImageFont.truetype("arial.ttf", 16)
+    except:
+        font = ImageFont.load_default()
+    
+    # Sort boxes by combined confidence
+    sorted_boxes = sorted(boxes, key=lambda x: x[4]*x[5], reverse=True)
+    
+    # Print original top detections
+    print("\nTop detections with original confidence:")
+    for i, box in enumerate(sorted_boxes[:5]):
+        cls_id = int(box[6])
+        cls_name = class_names[cls_id] if isinstance(class_names, list) and cls_id < len(class_names) else f"Class {cls_id}"
+        conf = box[4] * box[5]
+        print(f"Box {i}: {cls_name} - Original Confidence: {conf:.6f}")
+    
+    # Draw boxes with rescaled confidence values
+    colors = torch.FloatTensor([
+        [1, 0, 1], [0, 0, 1], [0, 1, 1],
+        [0, 1, 0], [1, 1, 0], [1, 0, 0]
+    ])
+    
+    def get_color(c, x, max_val):
+        ratio = float(x) / max_val * 5
+        i = int(np.floor(ratio))
+        j = int(np.ceil(ratio))
+        ratio = ratio - i
+        r = (1 - ratio) * colors[i][c] + ratio * colors[j][c]
+        return int(r * 255)
+    
+    # Print rescaled detections
+    print("\nTop detections with rescaled confidence:")
+    
+    for i, box in enumerate(sorted_boxes):
+        x, y, w, h, obj_score, cls_score, cls_id = box[:7]
+        
+        # Apply confidence scaling
+        rescaled_obj_score = min(obj_score * confidence_scale, 1.0)
+        rescaled_conf = rescaled_obj_score * cls_score
+        
+        # Print top 5 rescaled confidences
+        if i < 5:
+            cls_name = class_names[int(cls_id)] if isinstance(class_names, list) and int(cls_id) < len(class_names) else f"Class {int(cls_id)}"
+            print(f"Box {i}: {cls_name} - Rescaled Confidence: {rescaled_conf:.4f}")
+        
+        # Calculate box coordinates
+        xmin = (x - w/2) * img.width
+        ymin = (y - h/2) * img.height
+        xmax = (x + w/2) * img.width
+        ymax = (y + h/2) * img.height
+        
+        # Get color based on class
+        if isinstance(class_names, list) and int(cls_id) < len(class_names):
+            cls_id_int = int(cls_id)
+            offset = cls_id_int * 123457 % len(class_names)
+            red = get_color(2, offset, len(class_names))
+            green = get_color(1, offset, len(class_names))
+            blue = get_color(0, offset, len(class_names))
+            rgb = (red, green, blue)
+            
+            # Draw class name with rescaled confidence
+            label = f"{class_names[cls_id_int]} {rescaled_conf:.2f}"
+            draw.rectangle([xmin, ymin - 20, xmin + 8 * len(label), ymin], fill=rgb)
+            draw.text((xmin + 2, ymin - 18), label, fill=(0, 0, 0), font=font)
+        else:
+            rgb = (255, 0, 0)  # Red default
+            
+        # Draw bounding box
+        draw.rectangle([xmin, ymin, xmax, ymax], outline=rgb, width=3)
+    
+    if save_to:
+        img.save(save_to)
+        print(f"Saved prediction with properly rescaled confidence to {save_to}")
+    
+    return img

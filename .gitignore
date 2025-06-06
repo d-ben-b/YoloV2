@@ -5,3 +5,7 @@
 **/*.weights
 .idea
 **/.idea
+
+**/.vscode
+**/.DS_Store
+**/.venv
